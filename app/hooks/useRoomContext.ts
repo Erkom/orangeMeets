@@ -6,23 +6,24 @@ import type useRoom from './useRoom'
 import type { useRoomHistory } from './useRoomHistory'
 
 export type RoomContextType = {
-	traceLink?: string
-	feedbackEnabled: boolean
-	userDirectoryUrl?: string
-	joined: boolean
-	setJoined: Dispatch<SetStateAction<boolean>>
-	userMedia: UserMedia
-	peer: RxjsPeer
-	iceConnectionState: RTCIceConnectionState
-	room: ReturnType<typeof useRoom>
-	roomHistory: ReturnType<typeof useRoomHistory>
-	pushedTracks: {
-		video?: string
-		audio?: string
-		screenshare?: string
-	}
+    traceLink?: string
+    feedbackEnabled: boolean
+    userDirectoryUrl?: string
+    joined: boolean
+    setJoined: Dispatch<SetStateAction<boolean>>
+    userMedia: UserMedia
+    peer: RxjsPeer
+    iceConnectionState: RTCIceConnectionState
+    room: ReturnType<typeof useRoom>
+    roomHistory: ReturnType<typeof useRoomHistory>
+    pushedTracks: {
+        video?: string
+        audio?: string
+        screenshare?: string
+    }
+    isHost: boolean // Adicionando isHost aqui
 }
 
 export function useRoomContext() {
-	return useOutletContext<RoomContextType>()
+    return useOutletContext<RoomContextType>()
 }
