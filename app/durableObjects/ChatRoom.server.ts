@@ -26,8 +26,8 @@ export class ChatRoom extends Server<Env> {
     }
 
     // Adiciona campo para identificar o anfitrião
-    private hostId: string | null = null;
-
+	static hostId: string | null = null;
+	
     async onStart(): Promise<void> {
         // TODO: make this a part of partyserver
         this.ctx.setWebSocketAutoResponse(
