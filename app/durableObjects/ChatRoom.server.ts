@@ -25,6 +25,9 @@ export class ChatRoom extends Server<Env> {
 		hibernate: true,
 	}
 
+	// Adiciona campo para identificar o anfitrião
+	private hostId: string | null = null;
+
 	async onStart(): Promise<void> {
 		// TODO: make this a part of partyserver
 		this.ctx.setWebSocketAutoResponse(
@@ -38,13 +41,8 @@ export class ChatRoom extends Server<Env> {
 			// start the alarm to broadcast state every 30 seconds
 			this.ctx.storage.setAlarm(30000)
 		}
-
-		// cleaning out storage used by older versions of this code
-		// this.ctx.storage.delete('sessions').catch(() => {
-		// 	console.warn('Failed to delete old sessions')
-		// })
-		// We can remove this line later
 	}
+
 	async onConnect(
 		connection: Connection<User>,
 		ctx: ConnectionContext
@@ -66,6 +64,12 @@ export class ChatRoom extends Server<Env> {
 		}
 
 		connection.setState(user)
+		
+		// Define o primeiro usuário como anfitrião
+		if (this.hostId === null) {
+			this.hostId = connection.id;
+		}
+
 		this.broadcastState()
 	}
 
@@ -74,16 +78,40 @@ export class ChatRoom extends Server<Env> {
 	}
 
 	broadcastState() {
-		this.broadcast(
-			JSON.stringify({
+		// Converte o iterador de conexões para um array
+		const connections = Array.from(this.getConnections<User>());
+
+		if (!Array.isArray(connections)) {
+			console.error('connections is not an array:', connections);
+			return;
+		}
+
+		connections.forEach(connection => {
+			const userState = {
+				users: connections.map((otherConnection) => {
+					const user = otherConnection.state;
+					if (connection.id === this.hostId || otherConnection.id === this.hostId) {
+						// Anfitrião pode ver e ouvir todos e todos podem ver e ouvir o anfitrião
+						return user;
+					} else {
+						// Não incluir outros participantes
+						return {
+							...user,
+							tracks: {
+								...user!.tracks,
+								audioEnabled: false,
+								videoEnabled: false,
+							},
+						};
+					}
+				}).filter((x) => !!x),
+			};
+
+			this.sendMessage(connection, {
 				type: 'roomState',
-				state: {
-					users: [...this.getConnections<User>()]
-						.map((connection) => connection.state)
-						.filter((x) => !!x),
-				},
-			} satisfies ServerMessage)
-		)
+				state: userState,
+			} satisfies ServerMessage);
+		});
 	}
 
 	async onMessage(
@@ -97,10 +125,11 @@ export class ChatRoom extends Server<Env> {
 			}
 
 			let data: ClientMessage = JSON.parse(message)
+			console.log('Received message:', data); // Log detalhado das mensagens recebidas
 
 			switch (data.type) {
 				case 'userLeft':
-					// TODO: ??
+					// TODO: ?? 
 					break
 				case 'userUpdate':
 					connection.setState(data.user)
@@ -154,6 +183,7 @@ export class ChatRoom extends Server<Env> {
 					)
 					break
 				default:
+					console.error('Unhandled message type:', data.type); // Adiciona log detalhado para mensagens não tratadas
 					assertNever(data)
 					break
 			}
