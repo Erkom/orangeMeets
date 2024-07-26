@@ -26,7 +26,7 @@ export class ChatRoom extends Server<Env> {
     }
 
     // Adiciona campo para identificar o anfitrião
-	static hostId: string | null = null;
+	private hostId: string | null = null;
 	
     async onStart(): Promise<void> {
         // TODO: make this a part of partyserver
