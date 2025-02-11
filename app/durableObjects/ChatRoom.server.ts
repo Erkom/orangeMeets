@@ -78,26 +78,45 @@ export class ChatRoom extends Server<Env> {
 		const username = await getUsername(ctx.request)
 		assertNonNullable(username)
 
-		let user = await this.ctx.storage.get<User>(`session-${connection.id}`)
-		const foundInStorage = user !== undefined
-		if (!foundInStorage) {
-			user = {
-				id: connection.id,
-				name: username,
-				joined: false,
-				raisedHand: false,
-				speaking: false,
-				tracks: {
-					audioEnabled: false,
-					audioUnavailable: false,
-					videoEnabled: false,
-					screenShareEnabled: false,
-				},
-			}
+		 // Verificar se já existe um host na sala
+		const users = await this.getUsers()
+		const isFirstUser = users.size === 0
+		const currentHost = Array.from(users.values()).find(u => u.isHost === true)
+		
+		const previousUser = await this.ctx.storage.get<User>(`session-${connection.id}`)
+		const foundInStorage = previousUser !== undefined
+		const wasHost = foundInStorage ? previousUser.isHost : false
+		
+		let user = {
+			id: connection.id,
+			name: username,
+			joined: false,
+			raisedHand: false,
+			speaking: false,
+			isHost: isFirstUser || (!currentHost && wasHost), // Primeiro usuário ou reconexão do host quando não há outro
+			tracks: {
+				audioEnabled: false,
+				audioUnavailable: false,
+				videoEnabled: false,
+				screenShareEnabled: false,
+			},
+			...previousUser
 		}
 
-		// store the user's data in storage
+		console.log('User connection:', {
+			id: connection.id,
+			name: username, 
+			isFirstUser,
+			hasExistingHost: !!currentHost,
+			wasHost,
+			isHost: user.isHost,
+			currentHostId: currentHost?.id
+		})
+
+		// Certificar que o isHost está sendo mantido no storage
 		await this.ctx.storage.put(`session-${connection.id}`, user)
+
+		// store the user's data in storage
 		await this.ctx.storage.put(`heartbeat-${connection.id}`, Date.now())
 		await this.trackPeakUserCount()
 		await this.broadcastRoomState()
@@ -170,13 +189,59 @@ export class ChatRoom extends Server<Env> {
 	}
 
 	async broadcastRoomState() {
-		let didSomeoneQuit = false
 		const meetingId = await this.getMeetingId()
+		const allUsers = await this.getUsers()
+		const usersList = Array.from(allUsers.entries())
+		
+		// Encontrar host atual ou definir um novo
+		let currentHost = usersList.find(([_, u]) => u.isHost === true)?.[1]
+		
+		if (!currentHost && usersList.length > 0) {
+			const firstUser = usersList[0][1]
+			firstUser.isHost = true
+			currentHost = firstUser
+			
+			// Salvar o novo estado do host no storage
+			await this.ctx.storage.put(`session-${firstUser.id}`, firstUser)
+			
+			console.log('Assigning new host:', {
+				userId: firstUser.id,
+				userName: firstUser.name
+			})
+		}
+
+		// Garantir que todos os usuários tenham o estado isHost definido
+		const updatedUsers = await Promise.all(
+			usersList.map(async ([key, user]) => {
+				const isCurrentHost = user.id === currentHost?.id
+				// Sempre retornar um valor booleano explícito para isHost
+				const updatedUser = {
+					...user,
+					isHost: isCurrentHost
+				}
+				// Salvar o estado atualizado no storage
+				await this.ctx.storage.put(key, updatedUser)
+				return updatedUser
+			})
+		)
+
+		console.log('Current room state:', {
+			totalUsers: usersList.length,
+			hasHost: !!currentHost,
+			hostId: currentHost?.id,
+			hostName: currentHost?.name,
+			allUsers: updatedUsers.map(u => ({
+				id: u.id,
+				name: u.name,
+				isHost: u.isHost
+			}))
+		})
+
 		const aiEnabled =
 			(await this.ctx.storage.get<boolean>('ai:enabled')) ?? false
-		const aiSessionId =
+		const _aiSessionId =
 			(await this.ctx.storage.get<string>('ai:sessionId')) ?? undefined
-		const aiAudioTrack =
+		const _aiAudioTrack =
 			(await this.ctx.storage.get<string>('ai:trackName')) ?? undefined
 		const roomState = {
 			type: 'roomState',
@@ -191,28 +256,15 @@ export class ChatRoom extends Server<Env> {
 					error: await this.ctx.storage.get<string>('ai:error'),
 				},
 				meetingId,
-				users: [
-					...(await this.getUsers()).values(),
-					...(aiEnabled
-						? [
-								{
-									id: 'ai',
-									name: 'AI',
-									joined: true,
-									raisedHand: false,
-									transceiverSessionId: aiSessionId,
-									speaking: false,
-									tracks: {
-										audioEnabled: true,
-										audio: aiSessionId + '/' + aiAudioTrack,
-										audioUnavailable: false,
-										videoEnabled: false,
-										screenShareEnabled: false,
-									},
-								} satisfies User,
-							]
-						: []),
-				],
+				users: updatedUsers.map(user => {
+					console.log('Broadcasting user state:', {
+						userId: user.id,
+						userName: user.name,
+						isHost: user.isHost,
+						isCurrentHost: user.id === currentHost?.id
+					})
+					return user
+				}),
 			},
 		} satisfies ServerMessage
 
@@ -229,13 +281,7 @@ export class ChatRoom extends Server<Env> {
 					connectionId: connection.id,
 				})
 				await this.ctx.storage.delete(`session-${connection.id}`)
-				didSomeoneQuit = true
 			}
-		}
-
-		if (didSomeoneQuit) {
-			// broadcast again to remove the user who quit
-			await this.broadcastRoomState()
 		}
 	}
 
@@ -517,6 +563,31 @@ export class ChatRoom extends Server<Env> {
 					await this.ctx.storage.delete('ai:userControlling:pending')
 					this.ctx.storage.delete('ai:userControlling')
 					this.broadcastRoomState()
+					break
+				}
+				case 'kickUser': {
+					const user = await this.ctx.storage.get<User>(`session-${connection.id}`)
+					// Verificar explicitamente se o usuário é host
+					if (user?.isHost !== true) {
+						console.log('Kick attempt by non-host user:', {
+							userId: connection.id,
+							targetId: data.userId
+						})
+						break
+					}
+
+					const targetConnection = [...this.getConnections()].find(
+						c => c.id === data.userId
+					)
+					if (targetConnection) {
+						console.log('Host kicking user:', {
+							hostId: connection.id,
+							targetId: data.userId
+						})
+						targetConnection.close(1000, 'Kicked by host')
+						await this.ctx.storage.delete(`session-${data.userId}`)
+						await this.broadcastRoomState()
+					}
 					break
 				}
 				default: {

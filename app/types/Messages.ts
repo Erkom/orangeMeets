@@ -16,6 +16,7 @@ export type User = {
 		screenshare?: string
 		screenShareEnabled?: boolean
 	}
+	isHost: boolean // Mudar de opcional para obrigatório
 }
 
 export type RoomState = {
@@ -91,4 +92,8 @@ export type ClientMessage =
 	  }
 	| {
 			type: 'relenquishAiControl'
+	  }
+	| {
+			type: 'kickUser'
+			userId: string
 	  }

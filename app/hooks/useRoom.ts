@@ -23,6 +23,9 @@ export default function useRoom({
 		return () => userLeftFunctionRef.current()
 	}, [])
 
+	// Adicionar ref para preservar o status de host durante reconexões
+	const isHostRef = useRef(false)
+
 	const websocket = usePartySocket({
 		party: 'rooms',
 		room: roomName,
@@ -30,6 +33,10 @@ export default function useRoom({
 			const message = JSON.parse(e.data) as ServerMessage
 			switch (message.type) {
 				case 'roomState':
+					 // Preservar o status de host durante atualizações de estado
+					if (message.state.users.some(u => u.id === websocket.id && u.isHost)) {
+						isHostRef.current = true
+					}
 					// prevent updating state if nothing has changed
 					if (JSON.stringify(message.state) === JSON.stringify(roomState)) break
 					setRoomState(message.state)
@@ -79,7 +86,21 @@ export default function useRoom({
 	}, [websocket])
 
 	const identity = useMemo(
-		() => roomState.users.find((u) => u.id === websocket.id),
+		() => {
+			const user = roomState.users.find((u) => u.id === websocket.id)
+			console.log('Setting identity:', {
+				userId: websocket.id,
+				found: !!user,
+				isHost: user?.isHost || isHostRef.current,
+				preservedHost: isHostRef.current
+			})
+			
+			// Garantir que isHost é preservado e convertido para booleano
+			return user ? {
+				...user,
+				isHost: !!(user.isHost || isHostRef.current)
+			} : undefined
+		},
 		[roomState.users, websocket.id]
 	)
 
